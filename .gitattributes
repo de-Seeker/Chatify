@@ -1,0 +1,9 @@
+# Chatify text/binary policy
+*.lua text
+*.toc text
+*.md text
+*.xml text
+*.ttf binary
+*.blp binary
+*.png binary
+*.ogg binary

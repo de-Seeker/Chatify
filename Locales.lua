@@ -6,11 +6,13 @@ Locale.tables = Locale.tables or {}
 Locale.supported = Locale.supported or {
     enUS = true,
     ukUA = true,
+    zhCN = true,
 }
-Locale.order = Locale.order or { "client", "enUS", "ukUA" }
+Locale.order = Locale.order or { "client", "enUS", "ukUA", "zhCN" }
 Locale.nativeNames = Locale.nativeNames or {
     enUS = "English",
     ukUA = "Українська",
+    zhCN = "简体中文",
 }
 Locale._localizedDescNodes = Locale._localizedDescNodes or setmetatable({}, { __mode = "k" })
 Locale._localizedValuesNodes = Locale._localizedValuesNodes or setmetatable({}, { __mode = "k" })

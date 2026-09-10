@@ -110,6 +110,32 @@ AddFont(ns.Lists.Fonts, "Chatify: Exo 2 Legacy", ADDON_FONT_ROOT .. "Exo2.ttf", 
     aliases = { "Exo2.ttf" },
 })
 
+-- CJK fonts shipped with the zhCN/zhTW clients. Exposed only on Chinese clients:
+-- ARHei.TTF / ARKai_T.TTF are not present on other clients, and every bundled
+-- Latin family (Friz Quadrata, Exo 2, Inter, Inter Display) has no CJK glyphs, so
+-- Chinese text would render as tofu boxes. These entries give Chinese users a
+-- font that actually contains the glyphs, and they become the default below.
+local CHINESE_CLIENT_LOCALES = { zhCN = true, zhTW = true }
+local function IsCJKClient()
+    local loc = GetLocale and GetLocale() or ""
+    return CHINESE_CLIENT_LOCALES[loc] == true
+end
+if IsCJKClient() then
+    AddFont(ns.Lists.Fonts, "Chatify: 中文黑体 (AR Hei)", "Fonts\\ARHei.TTF", {
+        internal = true,
+        family = "CJK",
+        weight = "Regular",
+        recommended = true,
+        aliases = { "ARHei", "ARHei.TTF", "Chatify: AR Hei" },
+    })
+    AddFont(ns.Lists.Fonts, "Chatify: 中文楷体 (AR Kai)", "Fonts\\ARKai_T.TTF", {
+        internal = true,
+        family = "CJK",
+        weight = "Regular",
+        aliases = { "ARKai_T", "ARKai_T.TTF", "Chatify: AR Kai" },
+    })
+end
+
 -- Список форматів часу
 -- Joined channel discovery.
 --
@@ -613,6 +639,80 @@ function ns.IsFontEntryAvailable(entry)
     return entry and CanUseFontAsset(entry.path) or false
 end
 
+-- =========================================================
+-- 2b. CJK SAFE FONT RESOLUTION
+-- =========================================================
+-- Every font Chatify bundles (Friz Quadrata, Arial Narrow, Skurri, Morpheus,
+-- Exo 2, Inter, Inter Display) is Latin-only: it has no CJK glyphs, so on a
+-- Chinese client any of them renders 中文 as tofu boxes. On zhCN/zhTW we swap
+-- those paths for the client's own CJK fonts so chat text stays readable even
+-- when an old profile still points at a Latin family.
+local LATIN_ONLY_FONT_PATHS = {
+    ["fonts\\frizqt__.ttf"] = true,
+    ["fonts\\arialn.ttf"] = true,
+    ["fonts\\skurri.ttf"] = true,
+    ["fonts\\morpheus.ttf"] = true,
+}
+local CHATIFY_LATIN_FONT_PREFIXES = {
+    "interface\\addons\\chatify\\assets\\fonts\\",
+    "interface\\addons\\chatify\\fonts\\",
+}
+
+local function IsLatinOnlyFontPath(path)
+    if type(path) ~= "string" or path == "" then
+        return false
+    end
+    local lower = string.lower(path)
+    if LATIN_ONLY_FONT_PATHS[lower] then
+        return true
+    end
+    for _, prefix in ipairs(CHATIFY_LATIN_FONT_PREFIXES) do
+        if string.sub(lower, 1, #prefix) == prefix then
+            return true
+        end
+    end
+    return false
+end
+
+local cjkFontPathCache
+local function GetCJKFontPath()
+    if cjkFontPathCache then
+        return cjkFontPathCache
+    end
+
+    -- Known client-side CJK fonts, in order of preference. CanUseFontAsset
+    -- treats Fonts\* paths as built-in, and SetFont will simply fail on a client
+    -- that does not have the file, so probing here is safe on every flavour.
+    for _, candidate in ipairs({ "Fonts\\ARHei.TTF", "Fonts\\ARKai_T.TTF" }) do
+        if CanUseFontAsset(candidate) then
+            cjkFontPathCache = candidate
+            return candidate
+        end
+    end
+
+    -- Last resort: whatever the client currently uses for chat text. On zhCN
+    -- this is ARHei; on zhTW it is the client's own CJK-capable face.
+    if ChatFontNormal and type(ChatFontNormal.GetFont) == "function" then
+        local ok, clientFont = pcall(ChatFontNormal.GetFont, ChatFontNormal)
+        if ok and type(clientFont) == "string" and clientFont ~= "" then
+            cjkFontPathCache = clientFont
+            return clientFont
+        end
+    end
+
+    return nil
+end
+
+local function GetDefaultChatFontPath()
+    if IsCJKClient() then
+        local cjk = GetCJKFontPath()
+        if cjk then
+            return cjk
+        end
+    end
+    return CHATIFY_DEFAULT_FONT
+end
+
 local function BuildFontAliasLookup()
     local lookup = {}
     for _, entry in ipairs(ns.Lists.Fonts or {}) do
@@ -673,26 +773,41 @@ RegisterChatifyMedia()
 -- 3. MEDIA RESOLVERS
 -- =========================================================
 function ns.ResolveFontPath(fontID)
+    local path = nil
+
     if type(fontID) ~= "string" or fontID == "" then
-        return CHATIFY_DEFAULT_FONT
+        path = GetDefaultChatFontPath()
+    elseif string.find(fontID, "\\", 1, true) or string.find(fontID, "/", 1, true) then
+        path = fontID
+    else
+        local fromLSM = LSM and LSM.Fetch and LSM:Fetch("font", fontID, true)
+        if fromLSM and type(fromLSM) == "string" and CanUseFontAsset(fromLSM) then
+            path = fromLSM
+        else
+            fontAliasLookup = fontAliasLookup or BuildFontAliasLookup()
+            local fromAlias = fontAliasLookup[fontID] or fontAliasLookup[string.lower(fontID)]
+            if type(fromAlias) == "string" and fromAlias ~= "" then
+                path = fromAlias
+            end
+        end
     end
 
-    if string.find(fontID, "\\", 1, true) or string.find(fontID, "/", 1, true) then
-        return fontID
+    if type(path) ~= "string" or path == "" then
+        path = GetDefaultChatFontPath()
     end
 
-    local fromLSM = LSM and LSM.Fetch and LSM:Fetch("font", fontID, true)
-    if fromLSM and type(fromLSM) == "string" and CanUseFontAsset(fromLSM) then
-        return fromLSM
+    -- Chinese clients: never hand a Latin-only face to chat frames, otherwise
+    -- 中文 renders as tofu boxes. Old profiles still pointing at Friz/Exo/Inter
+    -- automatically get the client's own CJK font; explicit third-party LSM
+    -- fonts (which may contain CJK glyphs) are respected as chosen.
+    if IsCJKClient() and IsLatinOnlyFontPath(path) then
+        local cjk = GetCJKFontPath()
+        if cjk then
+            return cjk
+        end
     end
 
-    fontAliasLookup = fontAliasLookup or BuildFontAliasLookup()
-    local fromAlias = fontAliasLookup[fontID] or fontAliasLookup[string.lower(fontID)]
-    if type(fromAlias) == "string" and fromAlias ~= "" then
-        return fromAlias
-    end
-
-    return CHATIFY_DEFAULT_FONT
+    return path
 end
 
 function ns.ResolveSoundPath(soundID)
@@ -722,7 +837,7 @@ end
 ns.defaults = {
     profile = {
         -- === VISUALS ===
-        fontID = "Friz Quadrata (WoW)", -- Дефолтний шрифт клієнта WoW
+        fontID = "Friz Quadrata (WoW)", -- Client default; swapped to a CJK face on Chinese clients below
         fontOutline = "",    -- Контур тексту для кращої читабельності
         
         -- === TIME ===
@@ -963,6 +1078,12 @@ ns.defaults = {
         lastReplyTime = {},
     }
 }
+
+-- Chinese clients default to a CJK-capable face instead of the Latin
+-- Friz Quadrata, otherwise fresh profiles render 中文 as tofu boxes.
+if IsCJKClient() then
+    ns.defaults.profile.fontID = "Chatify: 中文黑体 (AR Hei)"
+end
 
 -- =========================================================
 -- 5. BUILD / SECURITY HELPERS

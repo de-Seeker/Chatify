@@ -27,6 +27,7 @@ libs\_manifest.xml
 Locales.lua
 locale\enUS.lua
 locale\ukUA.lua
+locale\zhCN.lua
 Config.lua
 
 ChatProxy.lua

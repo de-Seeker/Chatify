@@ -74,6 +74,19 @@ if ($DryRun) {
     $roboArgs += '/L'
 }
 
+# robocopy /XF only stops excluded files from being copied - it leaves any stale
+# copy already sitting in the target behind. Remove those first so a deployed
+# folder never keeps repository-only files from an earlier run.
+if (-not $DryRun) {
+    foreach ($name in $ExcludedFiles) {
+        $stale = Join-Path $GamePath $name
+        if (Test-Path -LiteralPath $stale) {
+            Remove-Item -LiteralPath $stale -Force
+            Write-Host "Removed repo-only file from target: $name" -ForegroundColor Yellow
+        }
+    }
+}
+
 & robocopy @roboArgs | Out-Null
 $code = $LASTEXITCODE
 
